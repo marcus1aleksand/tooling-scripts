@@ -91,6 +91,7 @@ install_package krisp
 install_package black
 install_package go
 install_package git
+install_package bats
 
 # Prompt to configure git username and email
 read -p "Enter your git username: " git_username
