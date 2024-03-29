@@ -1,8 +1,8 @@
 #!/bin/bash
 # Function to display progress bar
 progressbar() {
-  local duration=$1
-  local columns=$(tput cols)
+  local duration= $1
+  local columns= $(tput cols)
   local progress
   while true; do
     for ((i=0; i<columns; i++)); do
@@ -21,7 +21,10 @@ progressbar() {
 # Install Homebrew (if not installed)
 if ! command -v brew &> /dev/null; then
     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    (echo; echo 'eval "$(/opt/homebrew/bin/brew shellenv)"') >> /Users/marcusaleksandravicius/.zprofile
+    eval "$(/opt/homebrew/bin/brew shellenv)"
 fi
+
 
 # Start progress bar in the background
 progressbar 0.1 &
@@ -45,6 +48,22 @@ is_package_outdated() {
 upgrade_package() {
   local package=$1
   brew upgrade --cask $package
+}
+
+# Function to check if a package is installed (non-cask)
+is_non_cask_package_installed() {
+  local package=$1
+  brew list $package &> /dev/null
+}
+
+# Function to install or upgrade a non-cask package
+install_or_upgrade_non_cask_package() {
+  local package=$1
+  if ! is_non_cask_package_installed $package; then
+    brew install $package
+  else
+    brew upgrade $package
+  fi
 }
 
 # Install applications and tools
@@ -71,27 +90,28 @@ install_package coteditor
 install_package onedrive
 install_package whatsapp
 install_package bitwarden
-install_package jq
-install_package yq
-install_package helm
-install_package terraform
-install_package kubernetes-cli
-install_package kubectx
-install_package python
-install_package pre-commit
-install_package mkdocs
-install_package terraform-docs
-install_package k9s
-install_package azure-cli
-install_package awscli
-install_package google-cloud-sdk
-install_package argocd-cli
-install_package helmlint
 install_package krisp
-install_package black
-install_package go
-install_package git
-install_package bats
+
+# Install or upgrade non-cask packages
+install_or_upgrade_non_cask_package jq
+install_or_upgrade_non_cask_package yq
+install_or_upgrade_non_cask_package go
+install_or_upgrade_non_cask_package python
+install_or_upgrade_non_cask_package helm
+install_or_upgrade_non_cask_package kubernetes-cli
+install_or_upgrade_non_cask_package pre-commit
+install_or_upgrade_non_cask_package mkdocs
+install_or_upgrade_non_cask_package terraform
+install_or_upgrade_non_cask_package k9s
+install_or_upgrade_non_cask_package azure-cli
+install_or_upgrade_non_cask_package awscli
+install_or_upgrade_non_cask_package google-cloud-sdk
+install_or_upgrade_non_cask_package argocd-cli
+install_or_upgrade_non_cask_package helmlint
+install_or_upgrade_non_cask_package black
+install_or_upgrade_non_cask_package git
+install_or_upgrade_non_cask_package bats
+install_or_upgrade_non_cask_package mas
 
 # Prompt to configure git username and email
 read -p "Enter your git username: " git_username
