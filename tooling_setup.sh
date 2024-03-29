@@ -1,8 +1,8 @@
 #!/bin/bash
 # Function to display progress bar
 progressbar() {
-  local duration= $1
-  local columns= $(tput cols)
+  local duration=$1
+  local columns=$(tput cols)
   local progress
   while true; do
     for ((i=0; i<columns; i++)); do
@@ -128,16 +128,16 @@ if [ ! -d "$HOME/.oh-my-zsh" ]; then
   sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
 fi
 
-# Prompt to ask if the user wants to install Grammarly
-read -p "Do you want to install Grammarly? (y/n): " install_grammarly
+# Check if Grammarly is already installed
+if ! is_package_installed grammarly-desktop; then
+  # Prompt to ask if the user wants to install Grammarly
+  read -p "Do you want to install Grammarly? (y/n): " install_grammarly
 
-if [[ $install_grammarly == "y" ]]; then
-  # Install Grammarly
-  brew install --cask grammarly-desktop
+  if [[ $install_grammarly == "y" ]]; then
+    # Install Grammarly
+    brew install --cask grammarly-desktop
+  fi
 fi
-
-# Install mas (Mac App Store CLI)
-brew install mas
 
 # Prompt to ask for Apple ID
 read -p "Enter your Apple ID: " apple_id
