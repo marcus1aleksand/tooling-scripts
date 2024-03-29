@@ -54,6 +54,6 @@ After the package installation, the script prompts for the configuration of git 
 
 ## Usage
 
-```./tooling_setup.sh```
-
 ```bash
+./tooling_setup.sh
+```
