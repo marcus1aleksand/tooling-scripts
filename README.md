@@ -44,6 +44,7 @@ The script installs the following packages:
 - black
 - go
 - git
+- bats
 
 > Note: The packages marked as optional are not required for the script to function properly, but they provide additional functionality.
 
@@ -51,6 +52,8 @@ The script installs the following packages:
 
 After the package installation, the script prompts for the configuration of git username and email.
 
-To configure git username and email, run the following commands:
+## Usage
+
+```./tooling_setup.sh```
 
 ```bash
