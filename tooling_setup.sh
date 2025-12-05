@@ -16,13 +16,13 @@ progressbar() {
     for ((i = 0; i < columns; i++)); do
       printf "\e[44m "
     done
-    sleep $duration
+    sleep "$duration"
     printf "\r"
     for ((i = 0; i < columns; i++)); do
       printf " "
     done
     printf "\r"
-    sleep $duration
+    sleep "$duration"
   done
 }
 
