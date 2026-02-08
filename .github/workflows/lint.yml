@@ -1,0 +1,40 @@
+name: Lint
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: 
+      - opened
+      - synchronize 
+      - reopened
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@2.0.0
+        with:
+          severity: warning
+
+  shfmt:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run shfmt
+        uses: luizm/action-sh-checker@v0.9.0
+        env:
+          SHFMT_OPTS: -i 2 -ci
+        with:
+          sh_checker_shellcheck_disable: true
+          sh_checker_shfmt_disable: false
+
+  # NOTE: BATS tests are designed for local machine testing (check Homebrew, iTerm2, etc.)
+  # They're skipped in CI since GitHub runners don't have these tools installed.
+  # Run locally with: bats test_tooling_setup.bats
