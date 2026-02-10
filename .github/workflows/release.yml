@@ -1,0 +1,60 @@
+name: Release Version
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '*.sh'
+      - '*.bats'
+
+jobs:
+  update-semver:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Update Semantic Version
+      id: semantic_version
+      uses: paulhatch/semantic-version@v5.4.0
+      with:
+        tag_prefix: ""
+        major_pattern: "major:"
+        minor_pattern: "feat:"
+        bump_each_commit_patch_pattern: "fix:"
+        version_format: "${major}.${minor}.${patch}"
+        change_path: "."
+        bump_each_commit: false
+        search_commit_body: true
+        user_format_type: "json"
+
+    - name: Cancel if Unchanged
+      if: ${{ ! steps.semantic_version.outputs.changed }}
+      run: |
+        gh run cancel ${{ github.run_id }}
+        gh run watch ${{ github.run_id }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Bump version and push tag
+      id: tag_version
+      uses: mathieudutour/github-tag-action@v6.2
+      with:
+        custom_tag: ${{ steps.semantic_version.outputs.version_tag }}
+        tag_prefix: ""
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Create Release
+      uses: ncipollo/release-action@v1
+      id: release
+      with:
+        tag: ${{ steps.tag_version.outputs.new_tag }}
+        name: "tooling-scripts ${{ steps.tag_version.outputs.new_tag }}"
+        draft: false
+        prerelease: false
+        commit: ${{ steps.semantic_version.outputs.current_commit }}
+        generateReleaseNotes: true
