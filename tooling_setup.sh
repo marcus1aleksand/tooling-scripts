@@ -34,7 +34,7 @@ if ! command -v brew &>/dev/null; then
   (
     echo
     echo 'eval "$(/opt/homebrew/bin/brew shellenv)"'
-  ) >>/Users/marcusaleksandravicius/.zprofile
+  ) >>"$HOME/.zprofile"
   eval "$(/opt/homebrew/bin/brew shellenv)"
   echo -e "${GREEN}✓ Homebrew installed successfully${NC}"
 else
