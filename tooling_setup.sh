@@ -1,348 +1,417 @@
 #!/bin/bash
+# ═══════════════════════════════════════════════════════════════════════════════
+# 🛠️  Tooling Setup Script — Interactive Edition
+# ═══════════════════════════════════════════════════════════════════════════════
+# Scans for existing tools, presents an interactive checkbox UI, then installs
+# or updates only what you select.  Uses `gum` (Charm) for the TUI.
+# Works on macOS and Linux (Homebrew required on both).
+# ═══════════════════════════════════════════════════════════════════════════════
+set -euo pipefail
 
-# Color codes for better output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# ── Colours ───────────────────────────────────────────────────────────────────
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; DIM='\033[2m'
+NC='\033[0m'
 
-# Function to display progress bar
-progressbar() {
-  local duration=$1
-  local columns
-  columns=$(tput cols)
-  while true; do
-    for ((i = 0; i < columns; i++)); do
-      printf "\e[44m "
+# ── Helpers ───────────────────────────────────────────────────────────────────
+info()    { printf "${BLUE}%s${NC}\n" "$*"; }
+success() { printf "${GREEN}✓ %s${NC}\n" "$*"; }
+warn()    { printf "${YELLOW}⚠ %s${NC}\n" "$*"; }
+fail()    { printf "${RED}✗ %s${NC}\n" "$*"; }
+header()  {
+  echo ""
+  printf "${CYAN}═══════════════════════════════════════════${NC}\n"
+  printf "${CYAN}  %s${NC}\n" "$*"
+  printf "${CYAN}═══════════════════════════════════════════${NC}\n"
+  echo ""
+}
+
+# ── Ensure Homebrew ───────────────────────────────────────────────────────────
+ensure_homebrew() {
+  if command -v brew &>/dev/null; then
+    success "Homebrew found"
+    return
+  fi
+  info "Installing Homebrew…"
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  # shellcheck disable=SC2016
+  if [[ -x /opt/homebrew/bin/brew ]]; then
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+    grep -q 'brew shellenv' "$HOME/.zprofile" 2>/dev/null || \
+      echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> "$HOME/.zprofile"
+  elif [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
+    eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+  fi
+  success "Homebrew installed"
+}
+
+# ── Ensure gum (our TUI dependency) ──────────────────────────────────────────
+ensure_gum() {
+  if command -v gum &>/dev/null; then return; fi
+  info "Installing gum (interactive TUI toolkit)…"
+  brew install gum >/dev/null 2>&1
+  success "gum installed"
+}
+
+# ── Tool registry ────────────────────────────────────────────────────────────
+# Format: "type|brew_name|display_name|version_cmd"
+# type = cask | formula
+TOOLS=(
+  # GUI Applications (casks)
+  "cask|iterm2|iTerm2|"
+  "cask|docker|Docker Desktop|docker --version"
+  "cask|google-chrome|Google Chrome|"
+  "cask|firefox|Firefox|"
+  "cask|zoom|Zoom|"
+  "cask|slack|Slack|"
+  "cask|evernote|Evernote|"
+  "cask|coteditor|CotEditor|"
+  "cask|onedrive|OneDrive|"
+  "cask|whatsapp|WhatsApp|"
+  "cask|bitwarden|Bitwarden|"
+  "cask|krisp|Krisp|"
+  "cask|clipy|Clipy|"
+  "cask|visual-studio-code|VS Code|code --version"
+  "cask|cursor|Cursor|"
+  "cask|grammarly-desktop|Grammarly|"
+  # CLI Tools (formulas)
+  "formula|git|Git|git --version"
+  "formula|zsh|Zsh|zsh --version"
+  "formula|jq|jq|jq --version"
+  "formula|yq|yq|yq --version"
+  "formula|go|Go|go version"
+  "formula|python|Python|python3 --version"
+  "formula|helm|Helm|helm version --short"
+  "formula|kubernetes-cli|kubectl|kubectl version --client --short 2>/dev/null || kubectl version --client"
+  "formula|pre-commit|pre-commit|pre-commit --version"
+  "formula|mkdocs|mkdocs|mkdocs --version"
+  "formula|terraform|Terraform|terraform --version"
+  "formula|k9s|k9s|k9s version --short 2>/dev/null || k9s version"
+  "formula|azure-cli|Azure CLI|az --version"
+  "formula|awscli|AWS CLI|aws --version"
+  "formula|google-cloud-sdk|Google Cloud SDK|gcloud --version"
+  "formula|argocd|ArgoCD CLI|argocd version --client --short 2>/dev/null || argocd version --client"
+  "formula|black|Black (Python)|black --version"
+  "formula|bats-core|bats-core|bats --version"
+  "formula|mas|mas (App Store CLI)|mas version"
+)
+
+# ── Detect installed tools ───────────────────────────────────────────────────
+declare -A INSTALLED_VERSION  # brew_name → version string
+declare -A IS_INSTALLED       # brew_name → 1/0
+
+detect_tools() {
+  header "🔍  Scanning installed tools"
+  local type brew_name display version_cmd ver
+  for entry in "${TOOLS[@]}"; do
+    IFS='|' read -r type brew_name display version_cmd <<< "$entry"
+
+    # Check via brew
+    local installed=0
+    if [[ "$type" == "cask" ]]; then
+      brew list --cask "$brew_name" &>/dev/null 2>&1 && installed=1
+    else
+      brew list "$brew_name" &>/dev/null 2>&1 && installed=1
+    fi
+
+    IS_INSTALLED[$brew_name]=$installed
+
+    # Try to get version
+    ver=""
+    if [[ $installed -eq 1 && -n "$version_cmd" ]]; then
+      ver=$(eval "$version_cmd" 2>/dev/null | head -1 | sed 's/^[^0-9]*//' | cut -d' ' -f1 | tr -d ',' || true)
+    fi
+    if [[ $installed -eq 1 && -z "$ver" ]]; then
+      # Fallback: get version from brew info
+      if [[ "$type" == "cask" ]]; then
+        ver=$(brew info --cask "$brew_name" 2>/dev/null | head -1 | awk '{print $NF}' || true)
+      else
+        ver=$(brew info "$brew_name" 2>/dev/null | head -1 | awk '{print $NF}' || true)
+      fi
+    fi
+    INSTALLED_VERSION[$brew_name]="${ver:-unknown}"
+
+    if [[ $installed -eq 1 ]]; then
+      printf "  ${GREEN}✓${NC} %-25s ${DIM}v%s${NC}\n" "$display" "${INSTALLED_VERSION[$brew_name]}"
+    else
+      printf "  ${DIM}☐${NC} %-25s ${DIM}not installed${NC}\n" "$display"
+    fi
+  done
+  echo ""
+}
+
+# ── Build gum choices & present interactive picker ───────────────────────────
+interactive_select() {
+  header "📋  Select tools to install / update"
+  info "Use arrow keys to navigate, SPACE to toggle, a to select all, ENTER to confirm"
+  echo ""
+
+  local choices=()
+  local preselected=()
+  local type brew_name display version_cmd label
+
+  for entry in "${TOOLS[@]}"; do
+    IFS='|' read -r type brew_name display version_cmd <<< "$entry"
+
+    if [[ "${IS_INSTALLED[$brew_name]}" -eq 1 ]]; then
+      label="$display  (v${INSTALLED_VERSION[$brew_name]} installed)"
+      preselected+=("$label")
+    else
+      label="$display  (not installed)"
+    fi
+    choices+=("$label")
+  done
+
+  # Build gum command
+  local gum_args=("gum" "choose" "--no-limit"
+    "--header=Toggle with SPACE · Select all: a · Confirm: ENTER"
+    "--cursor.foreground=4"
+    "--selected.foreground=2"
+    "--height=25"
+  )
+
+  # Add pre-selected items
+  for s in "${preselected[@]}"; do
+    gum_args+=("--selected=$s")
+  done
+
+  # Add all choices
+  for c in "${choices[@]}"; do
+    gum_args+=("$c")
+  done
+
+  # Run gum and capture selections
+  SELECTED_LABELS=()
+  while IFS= read -r line; do
+    SELECTED_LABELS+=("$line")
+  done < <("${gum_args[@]}" || true)
+
+  if [[ ${#SELECTED_LABELS[@]} -eq 0 ]]; then
+    warn "Nothing selected. Exiting."
+    exit 0
+  fi
+}
+
+# ── Map selections back to brew names ────────────────────────────────────────
+declare -A SELECTED_MAP  # brew_name → 1
+
+resolve_selections() {
+  local type brew_name display version_cmd
+  for entry in "${TOOLS[@]}"; do
+    IFS='|' read -r type brew_name display version_cmd <<< "$entry"
+    SELECTED_MAP[$brew_name]=0
+    for label in "${SELECTED_LABELS[@]}"; do
+      if [[ "$label" == "$display "* ]]; then
+        SELECTED_MAP[$brew_name]=1
+        break
+      fi
     done
-    sleep "$duration"
-    printf "\r"
-    for ((i = 0; i < columns; i++)); do
-      printf " "
-    done
-    printf "\r"
-    sleep "$duration"
   done
 }
 
-# Install Homebrew (if not installed)
-echo -e "${BLUE}Checking Homebrew installation...${NC}"
-if ! command -v brew &>/dev/null; then
-  echo -e "${YELLOW}Homebrew not found. Installing...${NC}"
-  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-  (
-    echo
-    echo 'eval "$(/opt/homebrew/bin/brew shellenv)"'
-  ) >>"$HOME/.zprofile"
-  eval "$(/opt/homebrew/bin/brew shellenv)"
-  echo -e "${GREEN}✓ Homebrew installed successfully${NC}"
-else
-  echo -e "${GREEN}✓ Homebrew already installed${NC}"
-  echo -e "${BLUE}Updating Homebrew...${NC}"
-  brew update
-fi
+# ── Confirmation ─────────────────────────────────────────────────────────────
+confirm_plan() {
+  header "📝  Execution Plan"
 
-# Start progress bar in the background
-progressbar 0.1 &
+  local to_install=() to_update=() skipped=0
+  local type brew_name display version_cmd
 
-# Store the progress bar's PID
-PROGRESS_BAR_PID=$!
-
-# Function to check if a cask package is installed
-is_cask_installed() {
-  local package=$1
-  brew list --cask "$package" &>/dev/null
-}
-
-# Function to check if a formula package is installed
-is_formula_installed() {
-  local package=$1
-  brew list "$package" &>/dev/null
-}
-
-# Function to install or upgrade a cask package
-install_or_upgrade_cask() {
-  local package=$1
-  echo -e "${BLUE}Processing cask: ${package}${NC}"
-
-  if is_cask_installed "$package"; then
-    echo -e "${YELLOW}  ↻ ${package} already installed, checking for updates...${NC}"
-    if brew outdated --cask "$package" &>/dev/null; then
-      echo -e "${YELLOW}  ⬆ Upgrading ${package}...${NC}"
-      brew upgrade --cask "$package" && echo -e "${GREEN}  ✓ ${package} upgraded${NC}" || echo -e "${RED}  ✗ Failed to upgrade ${package}${NC}"
+  for entry in "${TOOLS[@]}"; do
+    IFS='|' read -r type brew_name display version_cmd <<< "$entry"
+    if [[ "${SELECTED_MAP[$brew_name]}" -eq 1 ]]; then
+      if [[ "${IS_INSTALLED[$brew_name]}" -eq 1 ]]; then
+        to_update+=("$display")
+        printf "  ${YELLOW}⬆${NC}  %s  ${DIM}(update)${NC}\n" "$display"
+      else
+        to_install+=("$display")
+        printf "  ${GREEN}⬇${NC}  %s  ${DIM}(install)${NC}\n" "$display"
+      fi
     else
-      echo -e "${GREEN}  ✓ ${package} is up to date${NC}"
+      ((skipped++)) || true
     fi
-  else
-    echo -e "${YELLOW}  ⬇ Installing ${package}...${NC}"
-    brew install --cask "$package" && echo -e "${GREEN}  ✓ ${package} installed${NC}" || echo -e "${RED}  ✗ Failed to install ${package}${NC}"
-  fi
-}
+  done
 
-# Function to install or upgrade a formula package
-install_or_upgrade_formula() {
-  local package=$1
-  echo -e "${BLUE}Processing formula: ${package}${NC}"
-
-  if is_formula_installed "$package"; then
-    echo -e "${YELLOW}  ↻ ${package} already installed, checking for updates...${NC}"
-    if brew outdated "$package" &>/dev/null; then
-      echo -e "${YELLOW}  ⬆ Upgrading ${package}...${NC}"
-      brew upgrade "$package" && echo -e "${GREEN}  ✓ ${package} upgraded${NC}" || echo -e "${RED}  ✗ Failed to upgrade ${package}${NC}"
-    else
-      echo -e "${GREEN}  ✓ ${package} is up to date${NC}"
-    fi
-  else
-    echo -e "${YELLOW}  ⬇ Installing ${package}...${NC}"
-    brew install "$package" && echo -e "${GREEN}  ✓ ${package} installed${NC}" || echo -e "${RED}  ✗ Failed to install ${package}${NC}"
-  fi
-}
-
-echo -e "\n${BLUE}═══════════════════════════════════════════${NC}"
-echo -e "${BLUE}  Installing GUI Applications (Casks)${NC}"
-echo -e "${BLUE}═══════════════════════════════════════════${NC}\n"
-
-# Install cask applications
-install_or_upgrade_cask iterm2
-install_or_upgrade_cask docker
-install_or_upgrade_cask google-chrome
-install_or_upgrade_cask firefox
-install_or_upgrade_cask zoom
-install_or_upgrade_cask slack
-install_or_upgrade_cask evernote
-install_or_upgrade_cask coteditor
-install_or_upgrade_cask onedrive
-install_or_upgrade_cask whatsapp
-install_or_upgrade_cask bitwarden
-install_or_upgrade_cask krisp
-install_or_upgrade_cask clipy
-
-# IDE Selection
-echo -e "\n${BLUE}═══════════════════════════════════════════${NC}"
-echo -e "${BLUE}  IDE Installation${NC}"
-echo -e "${BLUE}═══════════════════════════════════════════${NC}\n"
-
-vscode_installed=$(is_cask_installed visual-studio-code && echo "yes" || echo "no")
-cursor_installed=$(is_cask_installed cursor && echo "yes" || echo "no")
-
-if [ "$vscode_installed" = "yes" ] || [ "$cursor_installed" = "yes" ]; then
-  echo -e "${GREEN}Current IDE installations:${NC}"
-  [ "$vscode_installed" = "yes" ] && echo -e "  ✓ Visual Studio Code is installed"
-  [ "$cursor_installed" = "yes" ] && echo -e "  ✓ Cursor is installed"
   echo ""
-fi
+  printf "  ${BOLD}Install:${NC} %d  ${BOLD}Update:${NC} %d  ${BOLD}Skip:${NC} %d\n" \
+    "${#to_install[@]}" "${#to_update[@]}" "$skipped"
+  echo ""
 
-echo -e "${YELLOW}Which IDE would you like to install/update?${NC}"
-echo -e "  1) Visual Studio Code only"
-echo -e "  2) Cursor only"
-echo -e "  3) Both VS Code and Cursor"
-echo -e "  4) Skip IDE installation"
-read -p "Enter your choice (1-4): " ide_choice
-
-case $ide_choice in
-  1)
-    echo -e "${BLUE}Installing/updating Visual Studio Code...${NC}"
-    install_or_upgrade_cask visual-studio-code
-    ;;
-  2)
-    echo -e "${BLUE}Installing/updating Cursor...${NC}"
-    install_or_upgrade_cask cursor
-    ;;
-  3)
-    echo -e "${BLUE}Installing/updating both Visual Studio Code and Cursor...${NC}"
-    install_or_upgrade_cask visual-studio-code
-    install_or_upgrade_cask cursor
-    ;;
-  4)
-    echo -e "${YELLOW}⊘ Skipping IDE installation${NC}"
-    ;;
-  *)
-    echo -e "${RED}✗ Invalid choice. Skipping IDE installation${NC}"
-    ;;
-esac
-
-echo -e "\n${BLUE}═══════════════════════════════════════════${NC}"
-echo -e "${BLUE}  Installing CLI Tools (Formulas)${NC}"
-echo -e "${BLUE}═══════════════════════════════════════════${NC}\n"
-
-# Install formula packages
-install_or_upgrade_formula zsh
-install_or_upgrade_formula jq
-install_or_upgrade_formula yq
-install_or_upgrade_formula go
-install_or_upgrade_formula python
-install_or_upgrade_formula helm
-install_or_upgrade_formula kubernetes-cli
-install_or_upgrade_formula pre-commit
-install_or_upgrade_formula mkdocs
-install_or_upgrade_formula terraform
-install_or_upgrade_formula k9s
-install_or_upgrade_formula azure-cli
-install_or_upgrade_formula awscli
-install_or_upgrade_formula google-cloud-sdk
-install_or_upgrade_formula argocd
-install_or_upgrade_formula black
-install_or_upgrade_formula git
-install_or_upgrade_formula bats-core
-install_or_upgrade_formula mas
-
-echo -e "\n${BLUE}═══════════════════════════════════════════${NC}"
-echo -e "${BLUE}  Git Configuration${NC}"
-echo -e "${BLUE}═══════════════════════════════════════════${NC}\n"
-
-# Prompt to configure git username and email
-current_git_user=$(git config --global user.name 2>/dev/null)
-current_git_email=$(git config --global user.email 2>/dev/null)
-
-if [ -n "$current_git_user" ] && [ -n "$current_git_email" ]; then
-  echo -e "${GREEN}Git already configured:${NC}"
-  echo -e "  Username: ${current_git_user}"
-  echo -e "  Email: ${current_git_email}"
-  read -p "Do you want to reconfigure? (y/n): " reconfigure_git
-
-  if [[ $reconfigure_git != "y" ]]; then
-    echo -e "${GREEN}✓ Keeping current git configuration${NC}"
-  else
-    read -p "Enter your git username: " git_username
-    read -p "Enter your git email: " git_email
-    git config --global user.name "$git_username"
-    git config --global user.email "$git_email"
-    echo -e "${GREEN}✓ Git configuration updated${NC}"
+  if ! gum confirm "Proceed with the above plan?"; then
+    warn "Aborted by user."
+    exit 0
   fi
-else
-  read -p "Enter your git username: " git_username
-  read -p "Enter your git email: " git_email
-  git config --global user.name "$git_username"
-  git config --global user.email "$git_email"
-  echo -e "${GREEN}✓ Git configured successfully${NC}"
-fi
+}
 
-echo -e "\n${BLUE}═══════════════════════════════════════════${NC}"
-echo -e "${BLUE}  Oh My Zsh Installation${NC}"
-echo -e "${BLUE}═══════════════════════════════════════════${NC}\n"
+# ── Execute installs / updates ───────────────────────────────────────────────
+execute_plan() {
+  header "🚀  Installing & Updating"
 
-# Check if Oh My Zsh is already installed
-if [ ! -d "$HOME/.oh-my-zsh" ]; then
-  echo -e "${YELLOW}Installing Oh My Zsh...${NC}"
-  sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
-  echo -e "${GREEN}✓ Oh My Zsh installed${NC}"
-else
-  echo -e "${GREEN}✓ Oh My Zsh already installed${NC}"
-fi
+  local type brew_name display version_cmd
+  local total=0 done_count=0 fail_count=0
 
-echo -e "\n${BLUE}═══════════════════════════════════════════${NC}"
-echo -e "${BLUE}  Optional Applications${NC}"
-echo -e "${BLUE}═══════════════════════════════════════════${NC}\n"
+  # Count selected
+  for entry in "${TOOLS[@]}"; do
+    IFS='|' read -r type brew_name display version_cmd <<< "$entry"
+    [[ "${SELECTED_MAP[$brew_name]}" -eq 1 ]] && ((total++))
+  done
 
-# Check if Grammarly is already installed
-if ! is_cask_installed grammarly-desktop; then
-  read -p "Do you want to install Grammarly? (y/n): " install_grammarly
-  if [[ $install_grammarly == "y" ]]; then
-    install_or_upgrade_cask grammarly-desktop
-  fi
-else
-  echo -e "${GREEN}✓ Grammarly already installed${NC}"
-fi
+  for entry in "${TOOLS[@]}"; do
+    IFS='|' read -r type brew_name display version_cmd <<< "$entry"
+    [[ "${SELECTED_MAP[$brew_name]}" -eq 0 ]] && continue
 
-# Mac App Store applications
-if command -v mas &>/dev/null; then
-  echo -e "\n${BLUE}Checking Mac App Store login...${NC}"
+    ((done_count++))
+    printf "${BOLD}[%d/%d]${NC} " "$done_count" "$total"
 
-  # Check if already signed in
-  if mas account &>/dev/null; then
-    current_account=$(mas account)
-    echo -e "${GREEN}✓ Already signed in to Mac App Store: ${current_account}${NC}"
-
-    # Prompt to ask if the user wants to install Hand Mirror
-    read -p "Do you want to install Hand Mirror? (y/n): " install_hand_mirror
-
-    if [[ $install_hand_mirror == "y" ]]; then
-      echo -e "${BLUE}Searching for Hand Mirror...${NC}"
-      hand_mirror_id=$(mas search "Hand Mirror" | awk '/Hand Mirror/ {print $1; exit}')
-
-      if [ -n "$hand_mirror_id" ]; then
-        # Check if already installed
-        if mas list | grep -q "$hand_mirror_id"; then
-          echo -e "${GREEN}✓ Hand Mirror already installed${NC}"
+    if [[ "${IS_INSTALLED[$brew_name]}" -eq 1 ]]; then
+      printf "Updating ${CYAN}%s${NC}…" "$display"
+      if [[ "$type" == "cask" ]]; then
+        if brew upgrade --cask "$brew_name" 2>/dev/null; then
+          printf "\r${BOLD}[%d/%d]${NC} ${GREEN}✓${NC} %s updated\n" "$done_count" "$total" "$display"
         else
-          echo -e "${YELLOW}Installing Hand Mirror...${NC}"
-          mas install "$hand_mirror_id" && echo -e "${GREEN}✓ Hand Mirror installed${NC}"
+          printf "\r${BOLD}[%d/%d]${NC} ${GREEN}✓${NC} %s already latest\n" "$done_count" "$total" "$display"
         fi
       else
-        echo -e "${RED}✗ Could not find Hand Mirror in the Mac App Store${NC}"
+        if brew upgrade "$brew_name" 2>/dev/null; then
+          printf "\r${BOLD}[%d/%d]${NC} ${GREEN}✓${NC} %s updated\n" "$done_count" "$total" "$display"
+        else
+          printf "\r${BOLD}[%d/%d]${NC} ${GREEN}✓${NC} %s already latest\n" "$done_count" "$total" "$display"
+        fi
+      fi
+    else
+      printf "Installing ${CYAN}%s${NC}…" "$display"
+      if [[ "$type" == "cask" ]]; then
+        if brew install --cask "$brew_name" 2>/dev/null; then
+          printf "\r${BOLD}[%d/%d]${NC} ${GREEN}✓${NC} %s installed\n" "$done_count" "$total" "$display"
+        else
+          printf "\r${BOLD}[%d/%d]${NC} ${RED}✗${NC} %s failed\n" "$done_count" "$total" "$display"
+          ((fail_count++))
+        fi
+      else
+        if brew install "$brew_name" 2>/dev/null; then
+          printf "\r${BOLD}[%d/%d]${NC} ${GREEN}✓${NC} %s installed\n" "$done_count" "$total" "$display"
+        else
+          printf "\r${BOLD}[%d/%d]${NC} ${RED}✗${NC} %s failed\n" "$done_count" "$total" "$display"
+          ((fail_count++))
+        fi
       fi
     fi
+  done
+
+  echo ""
+  if [[ $fail_count -eq 0 ]]; then
+    success "All $done_count tools processed successfully!"
   else
-    echo -e "${YELLOW}Not signed in to Mac App Store${NC}"
-    read -p "Enter your Apple ID to sign in (or press Enter to skip): " apple_id
-
-    if [ -n "$apple_id" ]; then
-      mas signin "$apple_id"
-    else
-      echo -e "${YELLOW}⊘ Skipping Mac App Store applications${NC}"
-    fi
-  fi
-fi
-
-# Stop the progress bar
-kill $PROGRESS_BAR_PID &>/dev/null
-
-echo -e "\n${BLUE}═══════════════════════════════════════════${NC}"
-echo -e "${BLUE}  Setting up Shell Aliases${NC}"
-echo -e "${BLUE}═══════════════════════════════════════════${NC}\n"
-
-# Set up aliases (check if they already exist to avoid duplicates)
-setup_alias() {
-  local alias_line=$1
-  local shell_rc=$2
-
-  if ! grep -q "$alias_line" "$shell_rc" 2>/dev/null; then
-    echo "$alias_line" >>"$shell_rc"
-    echo -e "${GREEN}✓ Added alias to $shell_rc${NC}"
-  else
-    echo -e "${YELLOW}↻ Alias already exists in $shell_rc${NC}"
+    warn "$fail_count of $done_count tools had issues"
   fi
 }
 
-# Setup aliases for zsh
-if [ -f ~/.zshrc ]; then
-  setup_alias 'alias k="kubectl"' ~/.zshrc
-  setup_alias 'alias ctx="kubectx"' ~/.zshrc
-  setup_alias 'alias pf-argocd="kubectl port-forward svc/argocd-server -n argocd 8082:443"' ~/.zshrc
-fi
+# ── Post-install: Git config ────────────────────────────────────────────────
+configure_git() {
+  # Only if git was selected
+  [[ "${SELECTED_MAP[git]:-0}" -eq 0 ]] && return
 
-# Setup aliases for bash
-if [ -f ~/.bashrc ]; then
-  setup_alias 'alias k="kubectl"' ~/.bashrc
-  setup_alias 'alias ctx="kubectx"' ~/.bashrc
-  setup_alias 'alias pf-argocd="kubectl port-forward svc/argocd-server -n argocd 8082:443"' ~/.bashrc
-fi
+  header "⚙️  Git Configuration"
 
-# Final cleanup and update
-echo -e "\n${BLUE}═══════════════════════════════════════════${NC}"
-echo -e "${BLUE}  Final Cleanup${NC}"
-echo -e "${BLUE}═══════════════════════════════════════════${NC}\n"
+  local current_user current_email
+  current_user=$(git config --global user.name 2>/dev/null || true)
+  current_email=$(git config --global user.email 2>/dev/null || true)
 
-echo -e "${YELLOW}Running brew cleanup...${NC}"
-brew cleanup
-echo -e "${GREEN}✓ Cleanup complete${NC}"
+  if [[ -n "$current_user" && -n "$current_email" ]]; then
+    success "Git already configured: $current_user <$current_email>"
+    if ! gum confirm "Reconfigure git?"; then
+      return
+    fi
+  fi
 
-# Notify completion
-echo -e "\n${GREEN}═══════════════════════════════════════════${NC}"
-echo -e "${GREEN}  ✓ Installation Complete!${NC}"
-echo -e "${GREEN}═══════════════════════════════════════════${NC}\n"
+  local new_user new_email
+  new_user=$(gum input --placeholder "Your Name" --header "Git username:" --value "$current_user")
+  new_email=$(gum input --placeholder "you@example.com" --header "Git email:" --value "$current_email")
 
-echo -e "${YELLOW}📋 Summary:${NC}"
-echo -e "  • All applications have been installed or updated to their latest versions"
-echo -e "  • Clipy has been installed for clipboard management"
-echo -e "  • Git has been configured"
-echo -e "  • Oh My Zsh has been installed"
-echo -e "  • Shell aliases have been set up"
+  if [[ -n "$new_user" && -n "$new_email" ]]; then
+    git config --global user.name "$new_user"
+    git config --global user.email "$new_email"
+    success "Git configured: $new_user <$new_email>"
+  fi
+}
 
-echo -e "\n${YELLOW}⚠️  Important:${NC}"
-echo -e "  • Please restart your terminal to apply all changes"
-echo -e "  • Don't forget to grant necessary permissions to installed apps"
-echo -e "  • Clipy requires Accessibility permissions (System Settings > Privacy & Security > Accessibility)"
+# ── Post-install: Oh My Zsh ─────────────────────────────────────────────────
+setup_ohmyzsh() {
+  [[ "${SELECTED_MAP[zsh]:-0}" -eq 0 ]] && return
 
-echo -e "\n${BLUE}🎉 Enjoy your newly configured system!${NC}\n"
+  header "🐚  Oh My Zsh"
+
+  if [[ -d "$HOME/.oh-my-zsh" ]]; then
+    success "Oh My Zsh already installed"
+  else
+    if gum confirm "Install Oh My Zsh?"; then
+      sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+      success "Oh My Zsh installed"
+    fi
+  fi
+}
+
+# ── Post-install: Shell aliases ──────────────────────────────────────────────
+setup_aliases() {
+  [[ "${SELECTED_MAP[kubernetes-cli]:-0}" -eq 0 ]] && return
+
+  header "🔗  Shell Aliases"
+
+  local aliases=(
+    'alias k="kubectl"'
+    'alias ctx="kubectx"'
+    'alias pf-argocd="kubectl port-forward svc/argocd-server -n argocd 8082:443"'
+  )
+
+  for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
+    [[ ! -f "$rc" ]] && continue
+    for a in "${aliases[@]}"; do
+      if ! grep -qF "$a" "$rc" 2>/dev/null; then
+        echo "$a" >> "$rc"
+        printf "  ${GREEN}+${NC} Added to %s: ${DIM}%s${NC}\n" "$(basename "$rc")" "$a"
+      fi
+    done
+  done
+  success "Aliases configured"
+}
+
+# ── Cleanup ──────────────────────────────────────────────────────────────────
+cleanup() {
+  header "🧹  Cleanup"
+  brew cleanup 2>/dev/null
+  success "Brew cleanup complete"
+}
+
+# ── Summary ──────────────────────────────────────────────────────────────────
+summary() {
+  echo ""
+  printf "${GREEN}═══════════════════════════════════════════${NC}\n"
+  printf "${GREEN}  ✅  All done!${NC}\n"
+  printf "${GREEN}═══════════════════════════════════════════${NC}\n"
+  echo ""
+  echo -e "  ${YELLOW}⚠️  Restart your terminal to apply all changes${NC}"
+  echo -e "  ${YELLOW}⚠️  Grant permissions to newly installed apps as needed${NC}"
+  echo ""
+}
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+main() {
+  header "🛠️  Tooling Setup — Interactive Edition"
+
+  ensure_homebrew
+  info "Updating Homebrew…"
+  brew update --quiet
+
+  ensure_gum
+  detect_tools
+  interactive_select
+  resolve_selections
+  confirm_plan
+  execute_plan
+  configure_git
+  setup_ohmyzsh
+  setup_aliases
+  cleanup
+  summary
+}
+
+main "$@"
