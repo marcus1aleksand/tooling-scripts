@@ -9,16 +9,21 @@
 set -euo pipefail
 
 # ── Colours ───────────────────────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; DIM='\033[2m'
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
 NC='\033[0m'
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-info()    { printf "${BLUE}%s${NC}\n" "$*"; }
+info() { printf "${BLUE}%s${NC}\n" "$*"; }
 success() { printf "${GREEN}✓ %s${NC}\n" "$*"; }
-warn()    { printf "${YELLOW}⚠ %s${NC}\n" "$*"; }
-fail()    { printf "${RED}✗ %s${NC}\n" "$*"; }
-header()  {
+warn() { printf "${YELLOW}⚠ %s${NC}\n" "$*"; }
+fail() { printf "${RED}✗ %s${NC}\n" "$*"; }
+header() {
   echo ""
   printf "${CYAN}═══════════════════════════════════════════${NC}\n"
   printf "${CYAN}  %s${NC}\n" "$*"
@@ -37,8 +42,8 @@ ensure_homebrew() {
   # shellcheck disable=SC2016
   if [[ -x /opt/homebrew/bin/brew ]]; then
     eval "$(/opt/homebrew/bin/brew shellenv)"
-    grep -q 'brew shellenv' "$HOME/.zprofile" 2>/dev/null || \
-      echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> "$HOME/.zprofile"
+    grep -q 'brew shellenv' "$HOME/.zprofile" 2>/dev/null ||
+      echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >>"$HOME/.zprofile"
   elif [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
     eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
   fi
@@ -97,14 +102,14 @@ TOOLS=(
 )
 
 # ── Detect installed tools ───────────────────────────────────────────────────
-declare -A INSTALLED_VERSION  # brew_name → version string
-declare -A IS_INSTALLED       # brew_name → 1/0
+declare -A INSTALLED_VERSION # brew_name → version string
+declare -A IS_INSTALLED      # brew_name → 1/0
 
 detect_tools() {
   header "🔍  Scanning installed tools"
   local type brew_name display version_cmd ver
   for entry in "${TOOLS[@]}"; do
-    IFS='|' read -r type brew_name display version_cmd <<< "$entry"
+    IFS='|' read -r type brew_name display version_cmd <<<"$entry"
 
     # Check via brew
     local installed=0
@@ -151,7 +156,7 @@ interactive_select() {
   local type brew_name display version_cmd label
 
   for entry in "${TOOLS[@]}"; do
-    IFS='|' read -r type brew_name display version_cmd <<< "$entry"
+    IFS='|' read -r type brew_name display version_cmd <<<"$entry"
 
     if [[ "${IS_INSTALLED[$brew_name]}" -eq 1 ]]; then
       label="$display  (v${INSTALLED_VERSION[$brew_name]} installed)"
@@ -193,12 +198,12 @@ interactive_select() {
 }
 
 # ── Map selections back to brew names ────────────────────────────────────────
-declare -A SELECTED_MAP  # brew_name → 1
+declare -A SELECTED_MAP # brew_name → 1
 
 resolve_selections() {
   local type brew_name display version_cmd
   for entry in "${TOOLS[@]}"; do
-    IFS='|' read -r type brew_name display version_cmd <<< "$entry"
+    IFS='|' read -r type brew_name display version_cmd <<<"$entry"
     SELECTED_MAP[$brew_name]=0
     for label in "${SELECTED_LABELS[@]}"; do
       if [[ "$label" == "$display "* ]]; then
@@ -217,7 +222,7 @@ confirm_plan() {
   local type brew_name display version_cmd
 
   for entry in "${TOOLS[@]}"; do
-    IFS='|' read -r type brew_name display version_cmd <<< "$entry"
+    IFS='|' read -r type brew_name display version_cmd <<<"$entry"
     if [[ "${SELECTED_MAP[$brew_name]}" -eq 1 ]]; then
       if [[ "${IS_INSTALLED[$brew_name]}" -eq 1 ]]; then
         to_update+=("$display")
@@ -251,12 +256,12 @@ execute_plan() {
 
   # Count selected
   for entry in "${TOOLS[@]}"; do
-    IFS='|' read -r type brew_name display version_cmd <<< "$entry"
+    IFS='|' read -r type brew_name display version_cmd <<<"$entry"
     [[ "${SELECTED_MAP[$brew_name]}" -eq 1 ]] && ((total++))
   done
 
   for entry in "${TOOLS[@]}"; do
-    IFS='|' read -r type brew_name display version_cmd <<< "$entry"
+    IFS='|' read -r type brew_name display version_cmd <<<"$entry"
     [[ "${SELECTED_MAP[$brew_name]}" -eq 0 ]] && continue
 
     ((done_count++))
@@ -352,7 +357,7 @@ setup_ohmyzsh() {
 
 # ── Post-install: Shell aliases ──────────────────────────────────────────────
 setup_aliases() {
-  [[ "${SELECTED_MAP[kubernetes-cli]:-0}" -eq 0 ]] && return
+  [[ "${SELECTED_MAP[kubernetes - cli]:-0}" -eq 0 ]] && return
 
   header "🔗  Shell Aliases"
 
@@ -366,7 +371,7 @@ setup_aliases() {
     [[ ! -f "$rc" ]] && continue
     for a in "${aliases[@]}"; do
       if ! grep -qF "$a" "$rc" 2>/dev/null; then
-        echo "$a" >> "$rc"
+        echo "$a" >>"$rc"
         printf "  ${GREEN}+${NC} Added to %s: ${DIM}%s${NC}\n" "$(basename "$rc")" "$a"
       fi
     done
