@@ -357,7 +357,7 @@ setup_ohmyzsh() {
 
 # ── Post-install: Shell aliases ──────────────────────────────────────────────
 setup_aliases() {
-  [[ "${SELECTED_MAP[kubernetes-cli]:-0}" -eq 0 ]] && return
+  [[ "${SELECTED_MAP["kubernetes-cli"]:-0}" -eq 0 ]] && return
 
   header "🔗  Shell Aliases"
 
