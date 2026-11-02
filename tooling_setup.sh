@@ -46,6 +46,11 @@ ensure_homebrew() {
       echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >>"$HOME/.zprofile"
   elif [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
     eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+  elif [[ -x /usr/local/bin/brew ]]; then
+    # Intel macOS
+    eval "$(/usr/local/bin/brew shellenv)"
+    grep -q 'brew shellenv' "$HOME/.zprofile" 2>/dev/null ||
+      echo 'eval "$(/usr/local/bin/brew shellenv)"' >>"$HOME/.zprofile"
   fi
   success "Homebrew installed"
 }
@@ -102,14 +107,31 @@ TOOLS=(
 )
 
 # ── Detect installed tools ───────────────────────────────────────────────────
-declare -A INSTALLED_VERSION # brew_name → version string
-declare -A IS_INSTALLED      # brew_name → 1/0
+# IS_INSTALLED and INSTALLED_VERSION are indexed parallel to TOOLS. Associative
+# arrays are deliberately avoided: macOS still ships bash 3.2, which cannot
+# declare them, so the script would abort before doing any work.
+declare -a IS_INSTALLED=()
+declare -a INSTALLED_VERSION=()
+
+# tool_index returns the index of a brew name in TOOLS, or an empty string.
+tool_index() {
+  local target="$1" type brew_name display version_cmd i
+  for i in "${!TOOLS[@]}"; do
+    IFS='|' read -r type brew_name display version_cmd <<<"${TOOLS[$i]}"
+    if [[ "$brew_name" == "$target" ]]; then
+      printf '%s' "$i"
+      return 0
+    fi
+  done
+  printf ''
+  return 0
+}
 
 detect_tools() {
   header "🔍  Scanning installed tools"
-  local type brew_name display version_cmd ver
-  for entry in "${TOOLS[@]}"; do
-    IFS='|' read -r type brew_name display version_cmd <<<"$entry"
+  local type brew_name display version_cmd ver i
+  for i in "${!TOOLS[@]}"; do
+    IFS='|' read -r type brew_name display version_cmd <<<"${TOOLS[$i]}"
 
     # Check via brew
     local installed=0
@@ -119,7 +141,7 @@ detect_tools() {
       brew list "$brew_name" &>/dev/null 2>&1 && installed=1
     fi
 
-    IS_INSTALLED[$brew_name]=$installed
+    IS_INSTALLED[$i]=$installed
 
     # Try to get version
     ver=""
@@ -134,10 +156,10 @@ detect_tools() {
         ver=$(brew info "$brew_name" 2>/dev/null | head -1 | awk '{print $NF}' || true)
       fi
     fi
-    INSTALLED_VERSION[$brew_name]="${ver:-unknown}"
+    INSTALLED_VERSION[$i]="${ver:-unknown}"
 
     if [[ $installed -eq 1 ]]; then
-      printf "  ${GREEN}✓${NC} %-25s ${DIM}v%s${NC}\n" "$display" "${INSTALLED_VERSION[$brew_name]}"
+      printf "  ${GREEN}✓${NC} %-25s ${DIM}v%s${NC}\n" "$display" "${INSTALLED_VERSION[$i]}"
     else
       printf "  ${DIM}☐${NC} %-25s ${DIM}not installed${NC}\n" "$display"
     fi
@@ -145,27 +167,58 @@ detect_tools() {
   echo ""
 }
 
-# ── Build gum choices & present interactive picker ───────────────────────────
+# ── Build gum choices & present interactive picker ────────────────────────────
+# CHOICES is index-aligned with TOOLS so a selected label can be mapped back to
+# exactly one brew name. Matching on a display-name prefix would wrongly select
+# "Go" whenever "Google Chrome" was picked.
+declare -a CHOICES=()
+declare -a PRESELECTED=()
+declare -a SELECTED_LABELS=()
+
+# label_for builds the picker label shown for a tool.
+label_for() {
+  local idx="$1" type brew_name display version_cmd
+  IFS='|' read -r type brew_name display version_cmd <<<"${TOOLS[$idx]}"
+  if [[ "${IS_INSTALLED[$idx]:-0}" -eq 1 ]]; then
+    printf '%s  (v%s installed)' "$display" "${INSTALLED_VERSION[$idx]}"
+  else
+    printf '%s  (not installed)' "$display"
+  fi
+}
+
+build_choices() {
+  CHOICES=()
+  PRESELECTED=()
+
+  local type brew_name display version_cmd label existing i
+
+  for i in "${!TOOLS[@]}"; do
+    IFS='|' read -r type brew_name display version_cmd <<<"${TOOLS[$i]}"
+
+    label="$(label_for "$i")"
+
+    # Two tools must never share a label, otherwise a selection cannot be
+    # mapped back to exactly one brew name.
+    if [[ ${#CHOICES[@]} -gt 0 ]]; then
+      for existing in "${CHOICES[@]}"; do
+        if [[ "$existing" == "$label" ]]; then
+          fail "Duplicate tool label: '$label'. Display names in TOOLS must be unique."
+          exit 1
+        fi
+      done
+    fi
+
+    CHOICES+=("$label")
+    if [[ "${IS_INSTALLED[$i]:-0}" -eq 1 ]]; then
+      PRESELECTED+=("$label")
+    fi
+  done
+}
+
 interactive_select() {
   header "📋  Select tools to install / update"
   info "Use arrow keys to navigate, SPACE to toggle, a to select all, ENTER to confirm"
   echo ""
-
-  local choices=()
-  local preselected=()
-  local type brew_name display version_cmd label
-
-  for entry in "${TOOLS[@]}"; do
-    IFS='|' read -r type brew_name display version_cmd <<<"$entry"
-
-    if [[ "${IS_INSTALLED[$brew_name]}" -eq 1 ]]; then
-      label="$display  (v${INSTALLED_VERSION[$brew_name]} installed)"
-      preselected+=("$label")
-    else
-      label="$display  (not installed)"
-    fi
-    choices+=("$label")
-  done
 
   # Build gum command
   local gum_args=("gum" "choose" "--no-limit"
@@ -176,14 +229,18 @@ interactive_select() {
   )
 
   # Add pre-selected items
-  for s in "${preselected[@]}"; do
-    gum_args+=("--selected=$s")
-  done
+  if [[ ${#PRESELECTED[@]} -gt 0 ]]; then
+    for s in "${PRESELECTED[@]}"; do
+      gum_args+=("--selected=$s")
+    done
+  fi
 
   # Add all choices
-  for c in "${choices[@]}"; do
-    gum_args+=("$c")
-  done
+  if [[ ${#CHOICES[@]} -gt 0 ]]; then
+    for c in "${CHOICES[@]}"; do
+      gum_args+=("$c")
+    done
+  fi
 
   # Run gum and capture selections
   SELECTED_LABELS=()
@@ -198,19 +255,38 @@ interactive_select() {
 }
 
 # ── Map selections back to brew names ────────────────────────────────────────
-declare -A SELECTED_MAP # brew_name → 1
+declare -a SELECTED_MAP=() # indexed parallel to TOOLS
 
 resolve_selections() {
-  local type brew_name display version_cmd
-  for entry in "${TOOLS[@]}"; do
-    IFS='|' read -r type brew_name display version_cmd <<<"$entry"
-    SELECTED_MAP[$brew_name]=0
-    for label in "${SELECTED_LABELS[@]}"; do
-      if [[ "$label" == "$display "* ]]; then
-        SELECTED_MAP[$brew_name]=1
-        break
-      fi
-    done
+  local label idx i
+
+  # Reset every tool to unselected.
+  for i in "${!TOOLS[@]}"; do
+    SELECTED_MAP[$i]=0
+  done
+
+  if [[ ${#SELECTED_LABELS[@]} -eq 0 ]]; then
+    return
+  fi
+
+  # Map each selected label back to its tool by exact match.
+  for label in "${SELECTED_LABELS[@]}"; do
+    idx=-1
+    if [[ ${#CHOICES[@]} -gt 0 ]]; then
+      for i in "${!CHOICES[@]}"; do
+        if [[ "${CHOICES[$i]}" == "$label" ]]; then
+          idx="$i"
+          break
+        fi
+      done
+    fi
+
+    if [[ "$idx" -lt 0 ]]; then
+      warn "Ignoring unknown selection: $label"
+      continue
+    fi
+
+    SELECTED_MAP[$idx]=1
   done
 }
 
@@ -219,12 +295,12 @@ confirm_plan() {
   header "📝  Execution Plan"
 
   local to_install=() to_update=() skipped=0
-  local type brew_name display version_cmd
+  local type brew_name display version_cmd i
 
-  for entry in "${TOOLS[@]}"; do
-    IFS='|' read -r type brew_name display version_cmd <<<"$entry"
-    if [[ "${SELECTED_MAP[$brew_name]}" -eq 1 ]]; then
-      if [[ "${IS_INSTALLED[$brew_name]}" -eq 1 ]]; then
+  for i in "${!TOOLS[@]}"; do
+    IFS='|' read -r type brew_name display version_cmd <<<"${TOOLS[$i]}"
+    if [[ "${SELECTED_MAP[$i]:-0}" -eq 1 ]]; then
+      if [[ "${IS_INSTALLED[$i]:-0}" -eq 1 ]]; then
         to_update+=("$display")
         printf "  ${YELLOW}⬆${NC}  %s  ${DIM}(update)${NC}\n" "$display"
       else
@@ -232,7 +308,7 @@ confirm_plan() {
         printf "  ${GREEN}⬇${NC}  %s  ${DIM}(install)${NC}\n" "$display"
       fi
     else
-      ((skipped++)) || true
+      skipped=$((skipped + 1))
     fi
   done
 
@@ -251,23 +327,25 @@ confirm_plan() {
 execute_plan() {
   header "🚀  Installing & Updating"
 
-  local type brew_name display version_cmd
+  local type brew_name display version_cmd i
   local total=0 done_count=0 fail_count=0
 
   # Count selected
-  for entry in "${TOOLS[@]}"; do
-    IFS='|' read -r type brew_name display version_cmd <<<"$entry"
-    [[ "${SELECTED_MAP[$brew_name]}" -eq 1 ]] && ((total++))
+  for i in "${!TOOLS[@]}"; do
+    IFS='|' read -r type brew_name display version_cmd <<<"${TOOLS[$i]}"
+    if [[ "${SELECTED_MAP[$i]:-0}" -eq 1 ]]; then
+      total=$((total + 1))
+    fi
   done
 
-  for entry in "${TOOLS[@]}"; do
-    IFS='|' read -r type brew_name display version_cmd <<<"$entry"
-    [[ "${SELECTED_MAP[$brew_name]}" -eq 0 ]] && continue
+  for i in "${!TOOLS[@]}"; do
+    IFS='|' read -r type brew_name display version_cmd <<<"${TOOLS[$i]}"
+    [[ "${SELECTED_MAP[$i]:-0}" -eq 0 ]] && continue
 
-    ((done_count++))
+    done_count=$((done_count + 1))
     printf "${BOLD}[%d/%d]${NC} " "$done_count" "$total"
 
-    if [[ "${IS_INSTALLED[$brew_name]}" -eq 1 ]]; then
+    if [[ "${IS_INSTALLED[$i]:-0}" -eq 1 ]]; then
       printf "Updating ${CYAN}%s${NC}…" "$display"
       if [[ "$type" == "cask" ]]; then
         if brew upgrade --cask "$brew_name" 2>/dev/null; then
@@ -289,14 +367,14 @@ execute_plan() {
           printf "\r${BOLD}[%d/%d]${NC} ${GREEN}✓${NC} %s installed\n" "$done_count" "$total" "$display"
         else
           printf "\r${BOLD}[%d/%d]${NC} ${RED}✗${NC} %s failed\n" "$done_count" "$total" "$display"
-          ((fail_count++))
+          fail_count=$((fail_count + 1))
         fi
       else
         if brew install "$brew_name" 2>/dev/null; then
           printf "\r${BOLD}[%d/%d]${NC} ${GREEN}✓${NC} %s installed\n" "$done_count" "$total" "$display"
         else
           printf "\r${BOLD}[%d/%d]${NC} ${RED}✗${NC} %s failed\n" "$done_count" "$total" "$display"
-          ((fail_count++))
+          fail_count=$((fail_count + 1))
         fi
       fi
     fi
@@ -313,7 +391,9 @@ execute_plan() {
 # ── Post-install: Git config ────────────────────────────────────────────────
 configure_git() {
   # Only if git was selected
-  [[ "${SELECTED_MAP[git]:-0}" -eq 0 ]] && return
+  local git_idx
+  git_idx="$(tool_index git)"
+  [[ -z "$git_idx" || "${SELECTED_MAP[$git_idx]:-0}" -eq 0 ]] && return
 
   header "⚙️  Git Configuration"
 
@@ -341,7 +421,9 @@ configure_git() {
 
 # ── Post-install: Oh My Zsh ─────────────────────────────────────────────────
 setup_ohmyzsh() {
-  [[ "${SELECTED_MAP[zsh]:-0}" -eq 0 ]] && return
+  local zsh_idx
+  zsh_idx="$(tool_index zsh)"
+  [[ -z "$zsh_idx" || "${SELECTED_MAP[$zsh_idx]:-0}" -eq 0 ]] && return
 
   header "🐚  Oh My Zsh"
 
@@ -357,7 +439,9 @@ setup_ohmyzsh() {
 
 # ── Post-install: Shell aliases ──────────────────────────────────────────────
 setup_aliases() {
-  [[ "${SELECTED_MAP["kubernetes-cli"]:-0}" -eq 0 ]] && return
+  local kubectl_idx
+  kubectl_idx="$(tool_index kubernetes-cli)"
+  [[ -z "$kubectl_idx" || "${SELECTED_MAP[$kubectl_idx]:-0}" -eq 0 ]] && return
 
   header "🔗  Shell Aliases"
 
@@ -408,6 +492,7 @@ main() {
 
   ensure_gum
   detect_tools
+  build_choices
   interactive_select
   resolve_selections
   confirm_plan
@@ -419,4 +504,8 @@ main() {
   summary
 }
 
-main "$@"
+# Only run when executed directly. Sourcing the script exposes the functions
+# for the regression tests without triggering the installer.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi
