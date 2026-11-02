@@ -20,6 +20,7 @@ Automated macOS/Linux development environment setup with an **interactive checkb
 ## 📋 Prerequisites
 
 - **macOS 10.10+** or **Linux** with Homebrew (or it will be installed for you)
+- **bash 3.2 or newer** (the macOS default `/bin/bash` is enough)
 - **Internet connection**
 - **Admin privileges**
 
@@ -115,6 +116,19 @@ TOOLS+=(
   "cask|raycast|Raycast|"
 )
 ```
+
+## 🧪 Tests
+
+```bash
+# Regression tests for the interactive selection mapping (no dependencies)
+bash tests/test_selection_mapping.sh
+
+# Machine checks: Homebrew, iTerm2, Oh My Zsh, shell aliases
+bats test_tooling_setup.bats
+```
+
+The first suite runs in CI (see `.github/workflows/lint.yml`); the BATS suite is
+local-only because it inspects the machine it runs on.
 
 ## 🐛 Troubleshooting
 
